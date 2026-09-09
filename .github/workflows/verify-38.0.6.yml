@@ -60,7 +60,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest is macOS 26 ARM64 and remains covered by the baseline jobs above.
+        # Chrome for Testing channel builds currently hit MachPort rendezvous failures on that hosted ARM64 image,
+        # so the channel matrix uses the same macOS 26 release on GitHub's Intel runner to isolate browser-channel behavior.
+        os: [ubuntu-latest, windows-latest, macos-26-intel]
         channel: [stable, beta, dev]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
