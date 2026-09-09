@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Nolane Browser Acceptance Fixture",
+  "version": "0.0.1",
+  "permissions": ["sidePanel"],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  }
+}
