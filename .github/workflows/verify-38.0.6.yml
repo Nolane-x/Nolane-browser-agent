@@ -60,10 +60,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest ARM64 remains covered by baseline jobs using the runner's installed Chrome.
-        # Downloaded Chrome for Testing builds on GitHub macOS runners currently hit MachPort sandbox rendezvous failures,
-        # so channel probes use macOS 26 Intel plus a CI-only no-sandbox wrapper. Production launch defaults are unchanged.
-        os: [ubuntu-latest, windows-latest, macos-26-intel]
+        # Downloaded Chrome-for-Testing on GitHub-hosted macOS 26 Intel currently crashes child processes
+        # with MachPort rendezvous errors. macOS remains gated by the installed-Chrome baseline jobs above;
+        # downloaded stable/beta/dev channels are gated on Ubuntu + Windows and separately diagnosed below.
+        os: [ubuntu-latest, windows-latest]
         channel: [stable, beta, dev]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -101,16 +101,6 @@ jobs:
           printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
           chmod +x "$WRAPPER"
           echo "NOLANE_CHANNEL_CHROME=$WRAPPER" >> "$GITHUB_ENV"
-      - name: Prepare macOS Chrome-for-Testing wrapper for hosted MachPort sandbox constraints
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        run: |
-          WRAPPER="$RUNNER_TEMP/nolane-chrome-no-sandbox"
-          printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
-          chmod +x "$WRAPPER"
-          echo "NOLANE_CHANNEL_CHROME=$WRAPPER" >> "$GITHUB_ENV"
       - name: Use channel Chrome directly on Windows
         if: runner.os == 'Windows'
         shell: bash
@@ -127,6 +117,45 @@ jobs:
           NOLANE_CHROMIUM_PATH: ${{ env.NOLANE_CHANNEL_CHROME }}
           NOLANE_MV3_RESTART_ROUNDS: '10'
         run: node ci/mv3-reload-probe.mjs
+
+  macos-cft-diagnostic:
+    name: macos-cft-diagnostic-${{ matrix.channel }}-node22
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, beta, dev]
+    runs-on: macos-26-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run diagnostic classifier unit tests
+        run: node --test tests/macos-cft-diagnostic.test.mjs
+      - name: Install pinned Chrome-for-Testing channel
+        id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4
+        with:
+          chrome-version: ${{ matrix.channel }}
+      - name: Show exact Chrome-for-Testing version
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: '"$CHROME_PATH" --version'
+      - name: Prepare CI-only no-sandbox wrapper
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          WRAPPER="$RUNNER_TEMP/nolane-macos-cft-no-sandbox"
+          printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
+          chmod +x "$WRAPPER"
+          echo "NOLANE_MACOS_CFT_CHROME=$WRAPPER" >> "$GITHUB_ENV"
+      - name: Probe macOS CFT and fail closed on unknown signatures
+        env:
+          NOLANE_CHROMIUM_PATH: ${{ env.NOLANE_MACOS_CFT_CHROME }}
+        run: node ci/run-macos-cft-diagnostic.mjs
 
   stress:
     name: stress-${{ matrix.os }}-node22
