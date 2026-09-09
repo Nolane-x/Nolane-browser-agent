@@ -1,0 +1,79 @@
+name: synthetic-mv3-acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: synthetic-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify pinned harness bytes
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const expected = new Map(
+            fs.readFileSync('ci/harness.sha256', 'utf8')
+              .trim().split(/\r?\n/)
+              .map((line) => {
+                const [hash, file] = line.trim().split(/\s+/, 2);
+                return [file, hash];
+              })
+          );
+          for (const [file, hash] of expected) {
+            const actual = crypto.createHash('sha256').update(fs.readFileSync(`ci/${file}`)).digest('hex');
+            console.log(`${file} ${actual}`);
+            if (actual !== hash) throw new Error(`harness digest mismatch for ${file}: ${actual} != ${hash}`);
+          }
+          NODE
+      - name: Install Chrome for Testing
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - name: Show Chrome version
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: '"$CHROME_PATH" --version'
+      - name: Run exact browser acceptance harness against minimal MV3 extension
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          REPORT_PATH: synthetic-acceptance-${{ runner.os }}.json
+        run: |
+          node ci/browser-acceptance.mjs \
+            --extension-dir ci/fixtures/mv3-minimal \
+            --chromium "$CHROME_PATH" \
+            --report "$REPORT_PATH"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const file = process.env.REPORT_PATH;
+          const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+          console.log(`final_status=${report.status} final_code=${report.code}`);
+          if (report.status !== 'PASS') process.exit(1);
+          NODE
+      - name: Print diagnostics
+        if: always()
+        shell: bash
+        env:
+          REPORT_PATH: synthetic-acceptance-${{ runner.os }}.json
+        run: |
+          if [ -f "$REPORT_PATH" ]; then cat "$REPORT_PATH"; fi
+          find . -maxdepth 2 -type f -path './.browser-acceptance-*/chromium.log' -print -exec cat {} \; || true
