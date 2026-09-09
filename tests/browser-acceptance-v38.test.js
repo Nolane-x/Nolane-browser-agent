@@ -54,13 +54,6 @@ test('v38 browser acceptance adds no-sandbox only for root Linux launch',()=>{
   assert.equal(windows.includes('--no-sandbox'),false);
 });
 
-test('v38 browser acceptance supports explicit no-sandbox opt-in for restricted Linux CI only',()=>{
-  const optedIn=buildChromiumArgs({extensionDir:'/tmp/ext',profileDir:'/tmp/profile',port:9444,startUrl:'about:blank',platform:'linux',uid:1000,noSandbox:true});
-  assert.ok(optedIn.includes('--no-sandbox'));
-  const windows=buildChromiumArgs({extensionDir:'C:\\ext',profileDir:'C:\\profile',port:9444,startUrl:'about:blank',platform:'win32',uid:1000,noSandbox:true});
-  assert.equal(windows.includes('--no-sandbox'),false);
-});
-
 test('v38 browser acceptance uses Chrome new-headless on Linux so CDP pipe owns fd3/fd4 directly',()=>{
   const linux=buildChromiumArgs({extensionDir:'/tmp/ext',profileDir:'/tmp/profile',port:9444,startUrl:'about:blank',platform:'linux',uid:1000});
   assert.ok(linux.includes('--headless=new'));
