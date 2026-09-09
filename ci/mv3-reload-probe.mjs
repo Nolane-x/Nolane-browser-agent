@@ -14,7 +14,9 @@ const extensionDir = path.resolve('ci/probe-extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, 'manifest.json'), 'utf8'));
 const expectedVersion = String(manifest.version || '');
 const expectedPath = String(manifest.background?.service_worker || 'sw.js');
-const chromiumPath = resolveChromiumPath();
+const explicitChromiumPath = String(process.env.NOLANE_CHROMIUM_PATH || '').trim();
+const chromiumPath = resolveChromiumPath({explicit: explicitChromiumPath});
+const rounds = Math.max(1, Math.min(100, Number.parseInt(process.env.NOLANE_MV3_RESTART_ROUNDS || '5', 10) || 5));
 const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nolane-mv3-lifecycle-'));
 const logPath = path.join(profileDir, 'chromium.log');
 const out = fs.openSync(logPath, 'a');
@@ -130,7 +132,7 @@ async function terminateWorkerTarget(targetId) {
 
 try {
   const browser = await client.send('Browser.getVersion', {}, {timeoutMs: 30000});
-  console.log(`browser=${browser?.product || ''}`);
+  console.log(`configured_chromium=${explicitChromiumPath || 'auto-detect'} browser=${browser?.product || ''} restart_rounds=${rounds}`);
   const installed = await client.send('Extensions.loadUnpacked', {path: extensionDir}, {timeoutMs: 30000});
   const extensionId = String(installed?.id || '');
   if (!/^[a-p]{32}$/.test(extensionId)) throw new Error(`invalid extension id: ${extensionId}`);
@@ -145,7 +147,6 @@ try {
   let bootId = await readBootId(runtime);
   const wakePage = await createPersistentWakePage(extensionId);
 
-  const rounds = 5;
   for (let round = 1; round <= rounds; round += 1) {
     const previousTargetId = String(runtime.found?.target?.targetId || '');
     const previousBootId = bootId;
@@ -172,7 +173,7 @@ try {
     }
     console.log(`restart_round=${round} old_target=${previousTargetId} new_target=${nextTargetId} old_boot=${previousBootId} new_boot=${bootId} status=PASS`);
   }
-  console.log('mv3_worker_restart_reacquire=5/5');
+  console.log(`mv3_worker_restart_reacquire=${rounds}/${rounds}`);
 } finally {
   client.close();
   try { child.kill('SIGTERM'); } catch {}
