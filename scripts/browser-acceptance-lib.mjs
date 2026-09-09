@@ -40,7 +40,6 @@ export function readChromiumManagedPolicy({paths=POLICY_PATHS}={}){
   return Object.freeze({policy:safePolicy(merged),sources:Object.freeze(sources)});
 }
 
-
 export function resolveChromiumPath({platform=process.platform,env=process.env,exists=fs.existsSync,explicit=''}={}){
   const candidates=[];
   if(explicit)candidates.push(explicit);
@@ -198,6 +197,50 @@ async function waitForExtensionServiceWorker(client,expectedPath,timeoutMs){
   return null;
 }
 
+export async function waitForExtensionServiceWorkerRuntime(client,{expectedPath='src/background/service-worker.js',expectedExtensionId='',expectedVersion='',timeoutMs=5000,pollMs=100}={}){
+  if(!client?.send||typeof expectedPath!=='string'||!expectedPath||typeof expectedExtensionId!=='string'||!expectedExtensionId||typeof expectedVersion!=='string'||!expectedVersion)throw new TypeError('service-worker runtime acceptance arguments are invalid');
+  const timeout=Number(timeoutMs);const poll=Number(pollMs);
+  if(!Number.isFinite(timeout)||timeout<=0||!Number.isFinite(poll)||poll<0)throw new TypeError('service-worker runtime acceptance timing is invalid');
+  const deadline=Date.now()+timeout;
+  let sessionId='';
+  let targetId='';
+  let lastError=null;
+  while(Date.now()<deadline){
+    const remaining=Math.max(250,deadline-Date.now());
+    try{
+      const targetResult=await client.send('Target.getTargets',{}, {timeoutMs:Math.min(3000,remaining)});
+      const found=findExtensionServiceWorker(targetResult?.targetInfos,expectedPath);
+      if(!found||found.extensionId!==expectedExtensionId){
+        sessionId='';targetId='';
+      }else{
+        const nextTargetId=String(found.target?.targetId||'');
+        if(!nextTargetId)throw Object.assign(new Error('Service-worker target is missing targetId'),{code:'SERVICE_WORKER_TARGET_ID_MISSING'});
+        if(!sessionId||targetId!==nextTargetId){
+          const attached=await client.send('Target.attachToTarget',{targetId:nextTargetId,flatten:true},{timeoutMs:Math.min(3000,remaining)});
+          sessionId=String(attached?.sessionId||'');
+          targetId=nextTargetId;
+        }
+        if(sessionId){
+          const evaluated=await client.send('Runtime.evaluate',{expression:'({id:chrome.runtime.id,version:chrome.runtime.getManifest().version})',returnByValue:true,awaitPromise:true},{sessionId,timeoutMs:Math.min(3000,remaining)});
+          if(evaluated?.exceptionDetails){
+            lastError=Object.assign(new Error(String(evaluated.exceptionDetails.text||'service-worker runtime evaluation failed')),{code:'SERVICE_WORKER_RUNTIME_NOT_READY'});
+          }else{
+            const info=evaluationValue(evaluated);
+            if(info?.id===expectedExtensionId&&info?.version===expectedVersion){
+              return Object.freeze({ready:true,found,sessionId,info:Object.freeze({id:info.id,version:info.version})});
+            }
+          }
+        }
+      }
+    }catch(error){
+      lastError=error;
+      sessionId='';targetId='';
+    }
+    if(Date.now()<deadline&&poll>0)await sleep(Math.min(poll,Math.max(1,deadline-Date.now())));
+  }
+  return Object.freeze({ready:false,found:null,sessionId:'',info:null,errorCode:String(lastError?.code||''),errorMessage:String(lastError?.message||'')});
+}
+
 async function waitForPanelReady(client,sessionId,expectedVersion,timeoutMs=5000){
   const deadline=Date.now()+timeoutMs;
   while(Date.now()<deadline){
@@ -232,15 +275,17 @@ export async function runBrowserAcceptance({extensionDir,chromiumPath='',policyP
     extensionId=String(installed?.id||'');
     if(!/^[a-p]{32}$/.test(extensionId))throw Object.assign(new Error('Chrome did not return a valid unpacked extension id'),{code:'EXTENSION_INSTALL_ID_INVALID'});
     stage='service_worker';
-    const sw=await waitForExtensionServiceWorker(client,manifest.background?.service_worker||'src/background/service-worker.js',timeoutMs);
-    if(!sw){
+    const swRuntime=await waitForExtensionServiceWorkerRuntime(client,{
+      expectedPath:manifest.background?.service_worker||'src/background/service-worker.js',
+      expectedExtensionId:extensionId,
+      expectedVersion:String(manifest.version||''),
+      timeoutMs,
+    });
+    if(!swRuntime.ready){
       const report=normalizeAcceptanceReport({policy:'CLEAR',browserStarted:true,serviceWorker:false,sidePanel:false,expectedVersion:String(manifest.version||'')});
-      return Object.freeze({...report,extensionId,browserVersion,extensionLoadMethod:'cdp_pipe',failureStage:stage,logPath});
+      return Object.freeze({...report,extensionId,browserVersion,extensionLoadMethod:'cdp_pipe',failureStage:stage,errorCode:swRuntime.errorCode||'',errorMessage:swRuntime.errorMessage||'',logPath});
     }
-    if(sw.extensionId!==extensionId)throw Object.assign(new Error('Observed service worker belongs to an unexpected extension id'),{code:'EXTENSION_ID_MISMATCH'});
-    const attachedSw=await client.send('Target.attachToTarget',{targetId:sw.target.targetId,flatten:true},{timeoutMs:5000});
-    const swInfoResult=await client.send('Runtime.evaluate',{expression:'({id:chrome.runtime.id,version:chrome.runtime.getManifest().version})',returnByValue:true,awaitPromise:true},{sessionId:attachedSw.sessionId,timeoutMs:5000});
-    const swInfo=evaluationValue(swInfoResult);
+    const swInfo=swRuntime.info;
     stage='side_panel';
     const sidePanelPath=manifest.side_panel?.default_path||'src/sidepanel/index.html';
     const sideUrl=`chrome-extension://${extensionId}/${sidePanelPath}`;
