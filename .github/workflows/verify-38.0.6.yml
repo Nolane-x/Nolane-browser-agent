@@ -74,19 +74,44 @@ jobs:
         uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4
         with:
           chrome-version: ${{ matrix.channel }}
-      - name: Show exact Chrome channel version
+      - name: Show exact Chrome channel version on Windows without launching Chrome
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          $version = (Get-Item $env:CHROME_PATH).VersionInfo.ProductVersion
+          Write-Host "Google Chrome for Testing $version"
+      - name: Show exact Chrome channel version on Unix
+        if: runner.os != 'Windows'
         shell: bash
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: '"$CHROME_PATH" --version'
+      - name: Prepare restricted-Linux Chrome wrapper for hosted CI
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          WRAPPER="$RUNNER_TEMP/nolane-chrome-no-sandbox"
+          printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
+          chmod +x "$WRAPPER"
+          echo "NOLANE_CHANNEL_CHROME=$WRAPPER" >> "$GITHUB_ENV"
+      - name: Use channel Chrome directly outside restricted Linux CI
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: echo "NOLANE_CHANNEL_CHROME=$CHROME_PATH" >> "$GITHUB_ENV"
       - name: Run five real MV3 load cycles on channel
         env:
-          NOLANE_CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          NOLANE_CHROMIUM_PATH: ${{ env.NOLANE_CHANNEL_CHROME }}
           NOLANE_ACCEPTANCE_ATTEMPTS: '5'
         run: node ci/run-browser-acceptance-probe.mjs
       - name: Restart and reacquire worker ten times on channel
         env:
-          NOLANE_CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          NOLANE_CHROMIUM_PATH: ${{ env.NOLANE_CHANNEL_CHROME }}
           NOLANE_MV3_RESTART_ROUNDS: '10'
         run: node ci/mv3-reload-probe.mjs
 
