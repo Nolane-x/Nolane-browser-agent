@@ -30,5 +30,23 @@ jobs:
         run: node --check scripts/browser-acceptance-lib.mjs
       - name: Run acceptance unit regressions
         run: node --test tests/browser-acceptance-v38.test.js
-      - name: Run three real MV3 load cycles
+      - name: Run repeated real MV3 load cycles
         run: node ci/run-browser-acceptance-probe.mjs
+
+  mv3-reload:
+    name: mv3-reload-${{ matrix.os }}-node22
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax-check reload probe
+        run: node --check ci/mv3-reload-probe.mjs
+      - name: Reload extension and reacquire MV3 worker five times
+        run: node ci/mv3-reload-probe.mjs
