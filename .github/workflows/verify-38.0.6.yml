@@ -2,9 +2,6 @@ name: verify-38.0.6-ultra-hardened
 
 on:
   pull_request:
-  push:
-    branches:
-      - verify/38.0.6-ultra-hardened
   workflow_dispatch:
 
 permissions:
