@@ -60,9 +60,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is macOS 26 ARM64 and remains covered by the baseline jobs above.
-        # Chrome for Testing channel builds currently hit MachPort rendezvous failures on that hosted ARM64 image,
-        # so the channel matrix uses the same macOS 26 release on GitHub's Intel runner to isolate browser-channel behavior.
+        # macos-latest ARM64 remains covered by baseline jobs using the runner's installed Chrome.
+        # Downloaded Chrome for Testing builds on GitHub macOS runners currently hit MachPort sandbox rendezvous failures,
+        # so channel probes use macOS 26 Intel plus a CI-only no-sandbox wrapper. Production launch defaults are unchanged.
         os: [ubuntu-latest, windows-latest, macos-26-intel]
         channel: [stable, beta, dev]
     runs-on: ${{ matrix.os }}
@@ -91,7 +91,7 @@ jobs:
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: '"$CHROME_PATH" --version'
-      - name: Prepare restricted-Linux Chrome wrapper for hosted CI
+      - name: Prepare Linux Chrome-for-Testing wrapper for hosted CI sandbox constraints
         if: runner.os == 'Linux'
         shell: bash
         env:
@@ -101,8 +101,18 @@ jobs:
           printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
           chmod +x "$WRAPPER"
           echo "NOLANE_CHANNEL_CHROME=$WRAPPER" >> "$GITHUB_ENV"
-      - name: Use channel Chrome directly outside restricted Linux CI
-        if: runner.os != 'Linux'
+      - name: Prepare macOS Chrome-for-Testing wrapper for hosted MachPort sandbox constraints
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          WRAPPER="$RUNNER_TEMP/nolane-chrome-no-sandbox"
+          printf '#!/usr/bin/env bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > "$WRAPPER"
+          chmod +x "$WRAPPER"
+          echo "NOLANE_CHANNEL_CHROME=$WRAPPER" >> "$GITHUB_ENV"
+      - name: Use channel Chrome directly on Windows
+        if: runner.os == 'Windows'
         shell: bash
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
