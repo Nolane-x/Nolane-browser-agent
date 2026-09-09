@@ -30,11 +30,13 @@ jobs:
         run: node --check scripts/browser-acceptance-lib.mjs
       - name: Run acceptance unit regressions
         run: node --test tests/browser-acceptance-v38.test.js
-      - name: Run repeated real MV3 load cycles
+      - name: Run ten real MV3 load cycles
+        env:
+          NOLANE_ACCEPTANCE_ATTEMPTS: '10'
         run: node ci/run-browser-acceptance-probe.mjs
 
-  mv3-reload:
-    name: mv3-reload-${{ matrix.os }}-node22
+  mv3-worker-restart:
+    name: mv3-worker-restart-${{ matrix.os }}-node22
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +48,66 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Syntax-check reload probe
+      - name: Syntax-check worker lifecycle probe
         run: node --check ci/mv3-reload-probe.mjs
-      - name: Reload extension and reacquire MV3 worker five times
+      - name: Terminate and reacquire MV3 worker five times
+        env:
+          NOLANE_MV3_RESTART_ROUNDS: '5'
+        run: node ci/mv3-reload-probe.mjs
+
+  browser-channels:
+    name: channel-${{ matrix.channel }}-${{ matrix.os }}-node22
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        channel: [stable, beta, dev]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pinned Chrome channel
+        id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4
+        with:
+          chrome-version: ${{ matrix.channel }}
+      - name: Show exact Chrome channel version
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: '"$CHROME_PATH" --version'
+      - name: Run five real MV3 load cycles on channel
+        env:
+          NOLANE_CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          NOLANE_ACCEPTANCE_ATTEMPTS: '5'
+        run: node ci/run-browser-acceptance-probe.mjs
+      - name: Restart and reacquire worker ten times on channel
+        env:
+          NOLANE_CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          NOLANE_MV3_RESTART_ROUNDS: '10'
+        run: node ci/mv3-reload-probe.mjs
+
+  stress:
+    name: stress-${{ matrix.os }}-node22
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Stress thirty fresh Chrome MV3 load cycles
+        env:
+          NOLANE_ACCEPTANCE_ATTEMPTS: '30'
+        run: node ci/run-browser-acceptance-probe.mjs
+      - name: Stress fifty worker terminate/reacquire generations
+        env:
+          NOLANE_MV3_RESTART_ROUNDS: '50'
         run: node ci/mv3-reload-probe.mjs
