@@ -1,0 +1,162 @@
+name: verify-38.0.6-ultra-hardened
+
+on:
+  pull_request:
+  push:
+    branches:
+      - verify/38.0.6-ultra-hardened
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-38.0.6-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  core:
+    name: core-${{ matrix.os }}-node${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reconstruct pinned artifact
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const parts = fs.readdirSync('.ci').filter((name) => name.startsWith('artifact.b64.part')).sort();
+          if (!parts.length) throw new Error('artifact chunks are missing');
+          const encoded = parts.map((name) => fs.readFileSync(`.ci/${name}`, 'utf8')).join('').replace(/\s+/g, '');
+          const bytes = Buffer.from(encoded, 'base64');
+          fs.writeFileSync('nolane-browser-agent-38.0.6-ultra-hardened.zip', bytes);
+          const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+          const expected = fs.readFileSync('.ci/artifact.sha256', 'utf8').trim().split(/\s+/)[0];
+          console.log(`sha256=${actual}`);
+          if (actual !== expected) throw new Error(`artifact digest mismatch: ${actual} != ${expected}`);
+          NODE
+      - name: Extract artifact
+        shell: bash
+        run: |
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('nolane-browser-agent-38.0.6-ultra-hardened.zip') as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f'corrupt zip entry: {bad}')
+              z.extractall('artifact')
+              print('entries=', len(z.infolist()))
+          PY
+      - name: Verify source invariants
+        working-directory: artifact
+        run: npm run verify
+      - name: Run complete discovered test inventory
+        working-directory: artifact
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import { discoverTestFiles, runVerificationCommands } from './scripts/package-runner.mjs';
+          const files = discoverTestFiles(process.cwd());
+          console.log(`discovered_tests=${files.length}`);
+          await runVerificationCommands(process.cwd(), { stdio: 'capture', timeoutMs: 180000 });
+          console.log('all_discovered_tests=PASS');
+          NODE
+
+  package-repro:
+    name: package-repro-ubuntu-node20
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reconstruct and extract pinned artifact
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const parts = fs.readdirSync('.ci').filter((name) => name.startsWith('artifact.b64.part')).sort();
+          const encoded = parts.map((name) => fs.readFileSync(`.ci/${name}`, 'utf8')).join('').replace(/\s+/g, '');
+          const bytes = Buffer.from(encoded, 'base64');
+          const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+          const expected = fs.readFileSync('.ci/artifact.sha256', 'utf8').trim().split(/\s+/)[0];
+          if (actual !== expected) throw new Error('artifact digest mismatch');
+          fs.writeFileSync('artifact.zip', bytes);
+          NODE
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('artifact.zip') as z:
+              z.extractall('artifact')
+          PY
+      - name: Re-run authoritative packager from clean extract
+        working-directory: artifact
+        run: npm run package
+
+  browser-acceptance:
+    name: browser-acceptance-${{ matrix.os }}
+    needs: core
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reconstruct and extract pinned artifact
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const parts = fs.readdirSync('.ci').filter((name) => name.startsWith('artifact.b64.part')).sort();
+          const bytes = Buffer.from(parts.map((name) => fs.readFileSync(`.ci/${name}`, 'utf8')).join('').replace(/\s+/g, ''), 'base64');
+          const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+          const expected = fs.readFileSync('.ci/artifact.sha256', 'utf8').trim().split(/\s+/)[0];
+          if (actual !== expected) throw new Error('artifact digest mismatch');
+          fs.writeFileSync('artifact.zip', bytes);
+          NODE
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('artifact.zip') as z:
+              z.extractall('artifact')
+          PY
+      - name: Classify real-browser acceptance
+        working-directory: artifact
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const reportPath = 'browser-acceptance-ci.json';
+          const child = spawnSync(process.execPath, ['scripts/browser-acceptance.mjs', '--extension-dir', '.', '--report', reportPath], { encoding: 'utf8' });
+          if (child.stdout) process.stdout.write(child.stdout);
+          if (child.stderr) process.stderr.write(child.stderr);
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          console.log(`acceptance_status=${report.status} acceptance_code=${report.code}`);
+          if (report.status === 'FAIL') process.exit(1);
+          NODE
