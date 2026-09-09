@@ -38,35 +38,80 @@ async function readBootId(runtime) {
   return bootId;
 }
 
-async function wakeExtensionWorker(extensionId, round, timeoutMs = 12000) {
+async function waitForExtensionPageContext(sessionId, extensionId, timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
+  let lastInfo = null;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const target = await client.send('Target.createTarget', {
-        url: `chrome-extension://${extensionId}/panel.html?reload_round=${round}&wake=${Date.now()}`,
-      }, {timeoutMs: 4000});
-      const targetId = String(target?.targetId || '');
-      if (!targetId) throw new Error('wake target id is missing');
-      const attached = await client.send('Target.attachToTarget', {targetId, flatten: true}, {timeoutMs: 4000});
-      const sessionId = String(attached?.sessionId || '');
-      if (!sessionId) throw new Error('wake target session id is missing');
       const evaluated = await client.send('Runtime.evaluate', {
-        expression: 'chrome.runtime.sendMessage({type:"probe.ping"})',
+        expression: '({href: location.href, ready: document.readyState, runtimeId: globalThis.chrome?.runtime?.id || "", version: globalThis.chrome?.runtime?.getManifest?.().version || ""})',
+        returnByValue: true,
+        awaitPromise: true,
+      }, {sessionId, timeoutMs: 3000});
+      const info = valueOf(evaluated);
+      lastInfo = info;
+      if (
+        info?.runtimeId === extensionId &&
+        info?.version === expectedVersion &&
+        typeof info?.href === 'string' &&
+        info.href.startsWith(`chrome-extension://${extensionId}/`) &&
+        ['interactive', 'complete'].includes(info?.ready)
+      ) {
+        return info;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(100);
+  }
+  throw Object.assign(
+    new Error(`extension wake page did not become runtime-ready: ${lastError?.message || JSON.stringify(lastInfo) || 'unknown state'}`),
+    {code: 'EXTENSION_WAKE_PAGE_NOT_READY'}
+  );
+}
+
+async function wakeExtensionWorker(extensionId, round, timeoutMs = 12000) {
+  const target = await client.send('Target.createTarget', {
+    url: `chrome-extension://${extensionId}/panel.html?reload_round=${round}&wake=${Date.now()}`,
+  }, {timeoutMs: 4000});
+  const targetId = String(target?.targetId || '');
+  if (!targetId) throw Object.assign(new Error('wake target id is missing'), {code: 'WAKE_TARGET_ID_MISSING'});
+  const attached = await client.send('Target.attachToTarget', {targetId, flatten: true}, {timeoutMs: 4000});
+  const sessionId = String(attached?.sessionId || '');
+  if (!sessionId) throw Object.assign(new Error('wake target session id is missing'), {code: 'WAKE_TARGET_SESSION_MISSING'});
+
+  await waitForExtensionPageContext(sessionId, extensionId, Math.min(8000, timeoutMs));
+
+  const deadline = Date.now() + timeoutMs;
+  let lastResponse = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const evaluated = await client.send('Runtime.evaluate', {
+        expression: '(async () => { try { return await chrome.runtime.sendMessage({type:"probe.ping"}); } catch (error) { return {__probeError: String(error?.message || error)}; } })()',
         returnByValue: true,
         awaitPromise: true,
       }, {sessionId, timeoutMs: 5000});
       const response = valueOf(evaluated);
-      if (response?.ok === true && response?.id === extensionId && response?.version === expectedVersion && response?.bootId) {
+      lastResponse = response;
+      if (
+        response?.ok === true &&
+        response?.id === extensionId &&
+        response?.version === expectedVersion &&
+        response?.bootId
+      ) {
         return Object.freeze({targetId, bootId: String(response.bootId)});
       }
-      lastError = new Error(`wake ping returned invalid response: ${JSON.stringify(response)}`);
     } catch (error) {
       lastError = error;
     }
     await sleep(150);
   }
-  throw Object.assign(new Error(`service worker did not wake after reload: ${lastError?.message || lastError || 'unknown error'}`), {code: 'SERVICE_WORKER_WAKE_TIMEOUT'});
+  throw Object.assign(
+    new Error(`service worker did not wake after reload: ${lastError?.message || JSON.stringify(lastResponse) || 'unknown error'}`),
+    {code: 'SERVICE_WORKER_WAKE_TIMEOUT'}
+  );
 }
 
 try {
