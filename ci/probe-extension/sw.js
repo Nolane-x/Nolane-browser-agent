@@ -1,4 +1,6 @@
 const PROBE_KEY = 'nolane_acceptance_probe';
+const BOOT_ID = crypto.randomUUID();
+globalThis.__NOLANE_PROBE_BOOT_ID = BOOT_ID;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.set({
@@ -15,7 +17,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   sendResponse({
     ok: true,
     id: chrome.runtime.id,
-    version: chrome.runtime.getManifest().version
+    version: chrome.runtime.getManifest().version,
+    bootId: BOOT_ID
   });
   return false;
 });
