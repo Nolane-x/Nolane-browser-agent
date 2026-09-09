@@ -162,3 +162,30 @@ test('v38 browser acceptance retries transient worker evaluation failures before
   assert.equal(result?.ready,true);
   assert.equal(evaluateCalls,2);
 });
+
+test('v38 side-panel readiness retries a transient Runtime.evaluate timeout within the same panel deadline',async()=>{
+  let evaluateCalls=0;
+  const client={
+    async send(method){
+      assert.equal(method,'Runtime.evaluate');
+      evaluateCalls+=1;
+      if(evaluateCalls===1)throw Object.assign(new Error('CDP command timed out: Runtime.evaluate'),{code:'CDP_COMMAND_TIMEOUT'});
+      return {result:{type:'object',value:{ready:'complete',body:true,version:'38.0.6'}}};
+    }
+  };
+  const ready=await mod.waitForPanelReady(client,'panel-session','38.0.6',500);
+  assert.equal(ready,true);
+  assert.equal(evaluateCalls,2);
+});
+
+test('v38 side-panel readiness does not retry fatal CDP pipe closure',async()=>{
+  let evaluateCalls=0;
+  const client={
+    async send(){
+      evaluateCalls+=1;
+      throw Object.assign(new Error('CDP pipe closed'),{code:'CDP_PIPE_CLOSED'});
+    }
+  };
+  await assert.rejects(()=>mod.waitForPanelReady(client,'panel-session','38.0.6',500),error=>error?.code==='CDP_PIPE_CLOSED');
+  assert.equal(evaluateCalls,1);
+});

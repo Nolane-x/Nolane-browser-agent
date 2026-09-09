@@ -241,14 +241,28 @@ export async function waitForExtensionServiceWorkerRuntime(client,{expectedPath=
   return Object.freeze({ready:false,found:null,sessionId:'',info:null,errorCode:String(lastError?.code||''),errorMessage:String(lastError?.message||'')});
 }
 
-async function waitForPanelReady(client,sessionId,expectedVersion,timeoutMs=5000){
+const isTransientPanelReadyError=error=>{
+  if(error?.code==='CDP_COMMAND_TIMEOUT')return true;
+  if(error?.code!=='CDP_COMMAND_FAILED')return false;
+  return /execution context was destroyed|cannot find (?:default )?execution context/i.test(String(error?.message||''));
+};
+
+export async function waitForPanelReady(client,sessionId,expectedVersion,timeoutMs=5000){
   const deadline=Date.now()+timeoutMs;
+  let lastError=null;
   while(Date.now()<deadline){
-    const evaluated=await client.send('Runtime.evaluate',{expression:'({ready:document.readyState,body:document.body instanceof HTMLElement,version:chrome.runtime.getManifest().version})',returnByValue:true,awaitPromise:true},{sessionId,timeoutMs:Math.min(3000,Math.max(250,deadline-Date.now()))});
-    const info=evaluationValue(evaluated);
-    if(Boolean(info?.body)&&['interactive','complete'].includes(info?.ready)&&info?.version===expectedVersion)return true;
-    await sleep(100);
+    try{
+      const evaluated=await client.send('Runtime.evaluate',{expression:'({ready:document.readyState,body:document.body instanceof HTMLElement,version:chrome.runtime.getManifest().version})',returnByValue:true,awaitPromise:true},{sessionId,timeoutMs:Math.min(3000,Math.max(250,deadline-Date.now()))});
+      const info=evaluationValue(evaluated);
+      lastError=null;
+      if(Boolean(info?.body)&&['interactive','complete'].includes(info?.ready)&&info?.version===expectedVersion)return true;
+    }catch(error){
+      if(!isTransientPanelReadyError(error))throw error;
+      lastError=error;
+    }
+    if(Date.now()<deadline)await sleep(Math.min(100,Math.max(1,deadline-Date.now())));
   }
+  if(lastError)throw lastError;
   return false;
 }
 
