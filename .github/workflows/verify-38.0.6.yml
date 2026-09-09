@@ -28,5 +28,7 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Syntax-check acceptance harness
         run: node --check scripts/browser-acceptance-lib.mjs
+      - name: Run acceptance unit regressions
+        run: node --test tests/browser-acceptance-v38.test.js
       - name: Run three real MV3 load cycles
         run: node ci/run-browser-acceptance-probe.mjs
