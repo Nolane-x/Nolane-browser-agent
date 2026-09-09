@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PassThrough} from 'node:stream';
+import path from 'node:path';
 
 const mod=await import('../scripts/browser-acceptance-lib.mjs');
 const {classifyExtensionPolicy,findExtensionServiceWorker,buildChromiumArgs,normalizeAcceptanceReport,createCdpPipeClient}=mod;
@@ -35,7 +36,7 @@ test('v38 browser acceptance rejects ambiguous or wrong service-worker evidence'
 
 test('v38 browser acceptance uses modern CDP pipe extension installation instead of removed Chrome flags',()=>{
   const args=buildChromiumArgs({extensionDir:'/tmp/ext',profileDir:'/tmp/profile',port:9444,startUrl:'about:blank'});
-  assert.ok(args.includes('--user-data-dir=/tmp/profile'));
+  assert.ok(args.includes(`--user-data-dir=${path.resolve('/tmp/profile')}`));
   assert.ok(args.includes('--remote-debugging-pipe'));
   assert.ok(args.includes('--enable-unsafe-extension-debugging'));
   assert.equal(args.some(value=>value.startsWith('--remote-debugging-port=')),false);
